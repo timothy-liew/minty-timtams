@@ -1,6 +1,6 @@
-baseurl: /
+baseurl: minty-timtams.netlify.app
 languageCode: en-us
-title: A Hugo website
+title: Tidy Talks - Timothy Liew
 theme: hugo-PaperMod
 googleAnalytics: ''
 disqusShortname: ''
