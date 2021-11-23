@@ -1,0 +1,14 @@
+---
+title: Hi Hugo
+author: ''
+date: '2021-11-20'
+slug: hi-hugo
+categories: []
+tags: []
+---
+
+Sup nerds
+
+```{r}
+summary(Orange)
+```
