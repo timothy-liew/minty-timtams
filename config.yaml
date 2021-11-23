@@ -1,4 +1,4 @@
-baseurl: minty-timtams.netlify.app
+baseurl: /
 languageCode: en-us
 title: Tidy Talks - Timothy Liew
 theme: hugo-PaperMod
