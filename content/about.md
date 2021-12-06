@@ -1,6 +1,10 @@
 ---
-date: "2016-05-05T21:48:51-07:00"
+date: "2021-11-24T20:52:09"
 title: About
 ---
 
-This is a "hello world" example website for the [**blogdown**](https://github.com/rstudio/blogdown) package. The theme was forked from [@jrutheiser/hugo-lithium-theme](https://github.com/jrutheiser/hugo-lithium-theme) and modified by [Yihui Xie](https://github.com/yihui/hugo-lithium).
+Welcome to my blog! I mainly post all the different R stuff that I fiddle around with. I'm especially intrigued with Monte Carlo simulations, but I'm also a fan of designing complex data manipulation scripts for various purposes. 
+
+I'm also a huge fan of Pusheen:
+
+![Irresistable](https://pusheen.com/wp-content/uploads/2021/11/pudeen-gif.gif)

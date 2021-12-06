@@ -1,0 +1,214 @@
+---
+title: Regression Sums of Squares
+author: Timothy Liew
+date: '2021-11-24'
+slug: regression-sums-of-squares
+categories: []
+tags: [regression, statistics]
+
+---
+
+# Introduction
+
+Howdy ya'll. One of the most important statistical models is the linear regression model, which seeks to capture the relationship between an outcome/target variable and one or more predictor variables. For examples, a psychologist might be interested in seeing whether he or she can predict job satisfaction from a host of factors such as training opportunities, leadership communication with subordinates, and feedback received from one's supervisor. 
+
+Regression tries to capture this relationship by seeing whether variations in job satisfaction can be attributed to the different predictor variables.
+
+- For example, whether a person has high or low job satisfaction might be influenced by whether they receive adequate training opportunities. 
+
+To be more specific, we can divide this variation or variance into three parts:
+
+**Total Sum of Squares**: This refers to the total variability in a target variable. A larger value implies that there is more variability. For example, different people will have different grades and academic performance. There is a _variability_ in academic performance, and the larger the variability, the more varied the grades/academic performance. 
+
+More of than that not, we want to better understand what might _explain_ this variability, which brings us to...
+
+**Model Sum of Squares**: Also sometimes referred to as **Regression Sum of Squares**, this refers to the portion of the **Total Sum of Squares** that can be explained by your regression model. 
+
+- Going back to our grades example, perhaps we want to understand what might explain whether someone scores great or poor grades (i.e., the variability in grades), and we think a potential factor could be number of revision hours (obviously). So knowledge about someone's revision hours allows us to make some prediction about what their grades might be like. 
+- In other words, knowledge of a (legitimate) _predictor_ variable (e.g., revision hours) allows us to explain some of the variability in the _outcome_ variable (e.g., grades/academic performance), and this "explanatory power" translates to the model sum of squares. 
+
+**Residual Sum of Squares**: Obviously, number of revision hours is not going to be the sole explanatory factor of whether someone has good or bad academic performance; there are dozens of other factors at play here (e.g., individual differences like IQ), and while we can strive to measure more predictors, we aren't going to be able to catch them all. 
+
+- Because of that, there will always be a part of the total sum of squares that is not explained by the model sum of squares, and that is known as (you guessed it!) **residual sum of squares**.
+
+This gives us the equation, `SSR = SST - SSM`
+
+Sadly, we won't be getting too deep into the theory behind these _sources of variation_ too much today; this post aims to graphically represent the different sums of squares when fitting a linear regression model. 
+
+# Motivating Example
+
+![](https://media.giphy.com/media/xT4uQmy4Ta0eg1T7W0/giphy.gif)
+
+Well it's not _quite_ a motivating example; I just randomly thought of it when I was coming up with the code. 
+
+Let's say we're interested in predicting ice cream sales from daily temperature. I don't have an actual dataset, so let's simulate it
+
+```{r data, message=FALSE, warning=FALSE, results='asis'}
+library(tidyverse)
+library(broom)
+library(kableExtra)
+library(plotly)
+
+# Let's say we're trying to sell ice cream
+n <- 30
+b0 <- 200
+b1 <- 50
+
+set.seed(1234)
+temperature <- runif(n = n, min = 20, max = 25)
+sales <- b0 + b1*temperature + rnorm(n = n, mean = 500, sd = 400)
+df <- data.frame(temperature, sales)
+
+model <- lm(sales ~ temperature, data = df)
+
+output <- model %>% 
+  tidy() %>% 
+  # This will make our p-values conform to APA formatting
+  mutate(p.value = scales::pvalue(p.value)) %>% 
+  knitr::kable(caption = "Coefficient statistics for regressing sales on tempearture",
+               col.names = c("Predictor", "b", "SE", "t-statistic", "sig.level"),
+               # Configures decimal places
+               digits = c(0, 2, 2, 2, 3),
+               align = c("l", "r", "r", "r", "r")) %>% 
+  kable_styling(position = "center", full_width = TRUE)
+
+# Note, to present the table in a "nicer" format rather than raw Latex form, I need to include "results = 'asis'" in the rmarkdown chunk
+print(output)
+```
+
+Looking at the coefficient statistics, we can see that temperature is a statistically significant predictor of ice cream sales. 
+
+Now that we have our basic regression model, we just need to use `augment()` and `mutate()` to obtain the predicted value and the grand mean. 
+
+```{r augment}
+# Now let's get some statistics
+resid <- augment(model) %>% 
+  mutate(grand_mean = mean(sales))
+```
+
+## Basic Regression Output
+
+We plot a basic scatterplot to illustrate the relationship between daily temperature and ice cream sales.
+
+- The dashed horizontal line represents the grand mean of ice cream sales.
+- The orange line represents the regression line. 
+
+One thing to remember about the regression line here is that it represents the model's predictions of the outcome variable (i.e., sales) based on the value of the predictor variable (i.e., temperature) for each observation. Generally speaking, we want the regression line to be as closed to the data points as possible, which signifies that the model is doing a pretty darn good job of making predictions. 
+
+As we can see, there is a positive, linear relationship between the variables, where higher daily temperatures is accompanied by an increase in ice cream sales. 
+
+```{r basic regression}
+# Plot our graphs
+# Basic Regression Graph
+resid %>% 
+  ggplot(aes(x = temperature, y = sales)) + 
+  geom_point(size = 2, color = "cornflowerblue") + 
+  geom_hline(yintercept = resid$grand_mean, linetype = "dashed") + 
+  geom_smooth(method = "lm", se = FALSE, formula = y ~ x, color = "darkorange") + 
+  geom_text(aes(max(temperature)-0.5, y = grand_mean+100), label = "Grand mean") + 
+  geom_text(x = 22.5, y = 1850, label = "Regression Line", color = "darkorange2") + 
+  labs(title = "Basic Regression Plot") + 
+  theme_classic()
+
+```
+
+## Sums of Squares
+
+So now we want to isolate and identify the different sources of variation (i.e., sums of squares). First up is the total sum of squares.
+
+So talking about "variability" of scores, we will need to have a "baseline" of sorts to capture the extent of this variability. In the case of **total sums of squares**, we will use the grand mean of the outcome variable as our baseline; in other words, the total sums of squares can be defined as the overall deviation of each observation from the grand mean. 
+
+Graphically, this is represented by the red vertical lines:
+
+```{r SST}
+## Regression line (SST)
+SST <- resid %>% 
+  ggplot(aes(x = temperature, y = sales)) + 
+  geom_point(size = 2, color = "cornflowerblue") + 
+  geom_hline(yintercept = resid$grand_mean, linetype = "dashed") + 
+  geom_line(stat = "smooth",
+            method = "lm", 
+            se = FALSE, 
+            formula = y ~ x, 
+            color = "darkorange", 
+            alpha = 0.4,
+            size = 1) + 
+  geom_segment(aes(xend = temperature, yend = grand_mean), 
+               alpha = 0.7, 
+               color = "red",
+               size = 1)+
+  labs(title = "Regression - Total Sum of Squares") + 
+  theme_classic()
+
+ggplotly(SST) 
+```
+
+Now that we have graphed the total variability in ice cream sales, we want to examine how much of this variability is "explained" by our model (which in this case is just the sole temperature predictor). 
+
+Just like the total sums of squares, we're looking at the variation around our baseline, which in this case is the grand mean (dashed horizontal line). This time, though, we're looking at the distance between our baseline (grand mean) and the **model**, which is represented by the regression line. 
+
+In other words, the model sums of squares is represented graphically by the distance between the grand mean and the regression line. 
+
+```{r SSM}
+## Regression line (SSM)
+SSM <- resid %>% 
+  ggplot(aes(x = temperature, y = sales)) + 
+  geom_point(size = 2, 
+             color = "cornflowerblue",
+             alpha = 0.5) + 
+  geom_hline(yintercept = resid$grand_mean, linetype = "dashed") + 
+  geom_line(stat = "smooth",
+            method = "lm", 
+            se = FALSE, 
+            formula = y ~ x, 
+            color = "darkorange", 
+            alpha = 0.7,
+            size = 1) + 
+  geom_segment(aes(x = temperature, 
+                   xend = temperature, 
+                   y = .fitted, 
+                   yend = grand_mean), 
+               alpha = 0.7, 
+               color = "red",
+               size = 1) + 
+  labs(title = "Regression - Model Sum of Squares") + 
+  theme_classic()
+
+ggplotly(SSM)
+```
+
+Finally, we look at the residual sum of squares. Like the name implies, this is the "remaining" or "leftover" variance in the data that is not included in the model sum of squares. Statistically, the SSR signifies the portion of the total variation that is not accounted for by the model; graphically, it's represented by the distance between the regression line and the individual observations. 
+
+```{r SSR}
+## Regression line (SSR)
+SSR <- resid %>% 
+  ggplot(aes(x = temperature, y = sales)) + 
+  geom_point(size = 2, 
+             color = "cornflowerblue") +
+  geom_hline(yintercept = resid$grand_mean, 
+             linetype = "dashed",
+             alpha = 0.4) + 
+  geom_line(stat = "smooth",
+            method = "lm", 
+            se = FALSE, 
+            formula = y ~ x, 
+            color = "darkorange", 
+            alpha = 0.7,
+            size = 1) + 
+  geom_segment(aes(xend = temperature, 
+                   yend = .fitted), 
+               alpha = 0.7, 
+               color = "red", 
+               size = 1) + 
+  labs(title = "Regression - Residual Sum of Squares") + 
+  theme_classic()
+
+ggplotly(SSR)
+```
+
+So there you have it, the various regression sums of squares represented in graphs. To recap:
+
+- SST: The total sum of squares captures the total variability in the outcome variable, and is graphically represented by the distance between the observations and the grand mean.
+- SSM: The model sum of squares signify the portion of the SST that is _explained_ or captured by the regression model, and is visualized as the distance between the regression line and the grand mean.
+- SSR: The residual sum of squares is the "leftover" variance, capturing the portion of the total variability in the outcome that is _not_ covered by the model. This is graphed as the distance between the regression line and the observations. 
+
