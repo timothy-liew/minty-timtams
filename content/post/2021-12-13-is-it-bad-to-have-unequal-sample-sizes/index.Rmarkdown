@@ -250,7 +250,7 @@ saveRDS(res,file = "mcs_res.rds")
 res <- readRDS(file = "mcs_res.rds")
 ```
 
-# Visualisaing our results 
+# Visualising our results 
 
 Admittedly, everything I described previously might seem a bit abstract/esoteric; luckily, we can leverage the power of visualisations to make things a bit more understandable. 
 
