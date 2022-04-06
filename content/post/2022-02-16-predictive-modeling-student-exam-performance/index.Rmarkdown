@@ -1,0 +1,340 @@
+---
+title: 'Predictive Modeling: Student Exam Performance'
+author: Timothy Liew
+date: '2022-02-16'
+slug: predictive-modeling-student-exam-performance
+categories: []
+tags: [statistics, machine learning, eda]
+---
+
+# Introduction
+
+I've been musing on the application of machine learning in the context of higher education, especially when it comes to predicting student performance. At the time of this post, we're still very much enthralled by the grip of COVID-19, and I believe it's even more incumbent upon institutions to leverage data analytics in enhancing teaching practices and student performance. 
+
+To that end, I decided to dabble a bit in some predictive modeling of exam performance. The dataset we'll be using is a generated (i.e., fictional) data that captures the marks obtained by students across three domains: reading, writing, and math scores.
+
+<center>
+
+![](https://i.pinimg.com/originals/39/79/a6/3979a63b82c9927aa015eb13fb1ff22a.png)
+
+</center>
+
+- I downloaded the dataset from Kaggle, but the original source can be found on [the Royce Kimmons website](http://roycekimmons.com/tools/generated_data/exams).
+
+Let's read in the dataset and conduct some basic data screening.
+
+# Data Screening
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(caret) # For machine learning functions
+library(RColorBrewer) # For some nice colour palettes
+library(rpart) # For decision tree
+library(rpart.plot) # For decision tree plotting
+```
+
+```{r data import}
+dat <- read.csv("StudentsPerformance.csv")
+
+# As we can see, the dataset is made up of 1000 observations and 8 variables.
+glimpse(dat)
+
+# I'm going to rename some of the columns
+dat <- dat %>% 
+  rename(ethnicity = race.ethnicity,
+         parent_education = parental.level.of.education,
+         test_prep_course = test.preparation.course,
+         math_score = math.score,
+         read_score = reading.score,
+         write_score = writing.score)
+
+# For modeling purposes later on, I'm going to convert the character variables into factors
+dat <- dat %>% 
+  # This reads as "if columns return TRUE for is.character(), apply the as.factor() function)
+  mutate_if(is.character, as.factor)
+```
+
+In this dataset, we have some demogprahic information on the students, such as their gender and their parents' education, as well as their test scores in various domains (i.e., math, reading, and writing score).
+
+Let's take a look at the different categories for each categorical variable
+```{r factor-levels}
+# I use a simple looping to check the levels for each factor
+dat %>% 
+  select_if(is.factor) %>% 
+  map(levels)
+```
+
+We can check out some basic descriptive information, such as the gender distribution across the different ethnicities. 
+
+```{r}
+dat %>% 
+  ggplot(aes(x = ethnicity)) + 
+  geom_bar(aes(fill = gender), position = "fill") + 
+  geom_hline(yintercept = 0.50, linetype = "dashed", alpha = 0.6) +
+  theme_light() + 
+  scale_fill_manual(values = c("coral1", "cornflowerblue")) +
+  theme(legend.position = "bottom") + 
+  labs(y = "proportion")
+  
+```
+We see that there's a slightly higher number of females for some ethnicities, though this difference is pretty small. 
+
+We can also display the distribution for parent's education.
+
+```{r parent edu 1}
+# This code reveals that one of the two of the levels ("high school" and "some high school") are pretty much redundant, so let's collapse them into a single category
+dat %>% 
+  count(parent_education)
+```
+```{r parents edu 2}
+dat$parent_education <- dat$parent_education %>% 
+  fct_collapse(`high school` = c("high school", "some high school")) %>% 
+  fct_recode("college" = "some college", 
+             "associate" = "associate's degree",
+             "bachelor" = "bachelor's degree",
+             "master" = "master's degree")
+
+# Check if we collapsed it correctly
+fct_count(dat$parent_education)
+
+# Now to create a simple plot
+dat %>% 
+  mutate(parent_education = fct_relevel(parent_education, "high school", "college", "associate", "bachelor", "master")) %>% 
+  group_by(parent_education) %>% 
+  summarise(n = n()) %>% 
+  # This gives us the proportion of values across each group
+  mutate(freq = n/sum(n)) %>% 
+  ggplot(aes(x = parent_education, y = freq, fill = parent_education)) +
+  geom_col(show.legend = FALSE) + 
+  theme_light() +
+  scale_fill_brewer(palette = "Set3") + 
+  # We change the labels to percentage and duplicate the y-axis
+  scale_y_continuous(labels = scales::percent, sec.axis = dup_axis()) + 
+  labs(x = "", y = "")
+```
+So here we can clearly see a greater percentage of parents with a lower level of education (e.g., high school) compared to the higher levels of education (e.g., master's degree).
+
+Let's get a nice table up.
+```{r table, warning = FALSE}
+library(reactable)
+# I'm going to set a global theme for all of the reactables we will create in this script
+options(reactable.theme = reactableTheme(
+  color = "#000000",
+  highlightColor = "#f0f5f9",
+  style = list(fontFamily = "Cambria"),
+  searchInputStyle = list(width = "100%")
+))
+
+reactable(dat, 
+          highlight = TRUE,
+          outlined = TRUE,
+          bordered = TRUE,
+          wrap = FALSE,
+          searchable = TRUE,
+          # Set how many pages are shown 
+          defaultPageSize = 8,
+          # Centre-align columns as well as adjusting the width
+          defaultColDef = colDef(align = "center",
+                                 minWidth = 150))
+```
+
+
+# Research Questions
+
+After glancing at the variables, now we generate a few research questions to tackle:
+
+1. Are math, reading, and writing scores all correlated?
+2. How do students fare in these tests overall?
+3. Can we attempt to model the relationship between math score and other variables?
+
+
+Now that we have a few preliminary questions to consider, we can move on to performing some basic exploratory data analysis.
+
+# Exploratory Data Analysis
+
+Right, let's tackle the first question first: Plenty of research shows how integral reading and writing skills are to math competency; we need to be proficient in reading to be able to process and understand mathematical queries, as well as be adept in writing to be able to not only communicate our ideas, but also process and reason mathematical concepts ^[Adu-Gyamfi, K., Bosse, M.J., Faulconer, J. (2010). Assessing Understanding Through Reading and Writing in Mathematics. Retrieved from https://www.cimt.org.uk/journal/adugyamfi.pdf].
+
+To verify this three-way relationship, we can plot the data in a correlogram.
+```{r correlogram}
+library(ggcorrplot)
+
+# First we get some correlation values
+corr <- dat %>% 
+  select_if(is.numeric) %>% 
+  cor() %>% 
+  round(., 2)
+
+# Now we create our correlogram
+ggcorrplot(corr, 
+           hc.order = TRUE,
+           type = "full",
+           # This will show us the correlation coefficients
+           lab = TRUE,
+           outline.col = "white",
+           ggtheme = ggplot2::theme_minimal,
+           colors = c("#6D9EC1", "white", "#E46726"))
+```
+
+We see that reading and writing scores are highly positively related to each other (which makes sense); similarly, math scores are strongly positively correlated with both reading and writing scores, which fits our earlier assumptions about these three test scores. 
+
+Let's take a look at the distribution of these variables.
+
+```{r test distribution}
+# Let's give names to our facet labels
+test_labels <- c("Math Score", "Reading Score", "Writing Score")
+names(test_labels) <- c("math_score", "read_score", "write_score")
+
+dat %>% 
+  select_if(is.integer) %>% 
+  pivot_longer(cols = 1:3, names_to = "test_type", values_to = "test_score") %>% 
+  ggplot(aes(x = test_score)) + 
+  geom_histogram(aes(fill = test_type), binwidth = 5, show.legend = FALSE) + 
+  facet_wrap(~test_type, labeller = labeller(test_type = test_labels)) + 
+  theme_light() +
+  ggthemes::scale_fill_tableau() + 
+  labs(title = "Test Score Distributions", x = "Test Score", y = "")
+
+```
+
+Generally speaking, it seems that scores for each test are negatively skewed, which means that most students score above average in math, reading, and writing tests. 
+
+Finally, let's do some quick visualisations to see which variables might be potential predictors in our model.
+
+```{r hypo-viz, fig.width = 10, fig.height = 8}
+# Visualise parent education and test score
+bp_1 <- dat %>% 
+  mutate(parent_education = fct_relevel(parent_education, "high school", "college", "associate", "bachelor", "master")) %>% 
+  pivot_longer(cols = c("math_score", "read_score", "write_score"), 
+               names_to = "test_type",
+               values_to = "test_score") %>% 
+  ggplot(aes(x = parent_education, y = test_score)) + 
+  geom_boxplot(aes(fill = parent_education)) + 
+  theme_minimal() + 
+  ggthemes::scale_fill_tableau() + 
+  facet_wrap(~test_type) + 
+  theme(legend.position = "bottom", axis.text.x = element_blank())
+  # Change angel to 90 degrees, than do some horizontal and vertical adjustments
+  # theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Visualise lunch plan and test score
+bp_2 <- dat %>% 
+  pivot_longer(cols = c("math_score", "read_score", "write_score"), 
+               names_to = "test_type",
+               values_to = "test_score") %>% 
+  ggplot(aes(x = lunch, y = test_score)) + 
+  # after_scale let's us map to fill the transparent version of color (i.e., we map fill after mapping color)
+  geom_boxplot(aes(color = lunch, fill = after_scale(alpha(color, 0.5)))) + 
+  geom_jitter(aes(color = lunch), width = .05, alpha = 0.05) + 
+  theme_minimal() + 
+  ggthemes::scale_fill_tableau() + 
+  ggthemes::scale_color_tableau() +
+  facet_wrap(~test_type) + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, 
+                                                             vjust = 0.5, 
+                                                             hjust = 1))
+
+# Visualise test preparation and test score
+vi_1 <- dat %>% 
+  pivot_longer(cols = c("math_score", "read_score", "write_score"), 
+               names_to = "test_type",
+               values_to = "test_score") %>% 
+  ggplot(aes(x = test_prep_course, 
+             y = test_score, 
+             color = test_prep_course, 
+             fill = test_prep_course)) + 
+  # The bw argument controls the smoothing of the plot
+  geom_violin(aes(fill = test_prep_course), bw = .9, size = 1.2, color = NA) +
+  geom_boxplot(fill = "white", width = .2, size = 1.2, outlier.shape = NA) +
+  theme_minimal() + 
+  ggthemes::scale_fill_tableau() + 
+  ggthemes::scale_color_tableau() +
+  facet_wrap(~test_type) + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 90, 
+                                                             vjust = 0.5, 
+                                                             hjust = 1))
+
+# Let's combine all these plots together
+library(ggpubr)
+# We use nested ggarrange() to change the column/row span of the plot
+ggarrange(bp_1, 
+          ggarrange(bp_2, vi_1, ncol = 2, labels = c("B", "C")),
+          nrow = 2, labels = "A")
+
+```
+As we can observe, on average, test scores seem to be higher when one's parents have higher education, when one is given the standard lunch plan, and when one has completed their test prep. Let's do some predictive modeling next to see whether these can be substantial predictors of student's performance.
+
+# Predictive Modeling
+
+One question we're interested in answering is whether we are able to predict the math score from some of the existing variables. 
+
+We'll start off by building a linear regression model, and slowly work toward building some tree models. We will focus more on predictive metrics over inferential ones in this demonstration.
+
+Let's use the `caret` package to fit our models. Let's start with linear regression
+
+```{r linear regression}
+# Setting seed for reproducibility
+set.seed(202)
+
+# We'll implement a repeated 10-fold cross-validation
+mod_lm <- train(form = math_score ~ gender + parent_education + lunch + test_prep_course,
+                data = dat,
+                method = "lm",
+                trControl = trainControl(method = "repeatedcv", 
+                                         number = 10, 
+                                         repeats = 5))
+print(mod_lm)
+```
+
+According to the regression output, it would seem that the model isn't all that impressive, predicting only `r round(mod_lm$results$Rsquared,2)` of the variance in math score. The RMSE value indicates that future predictions would be off by approximately `r round(mod_lm$results$RMSE,2)`. 
+
+Let's try fitting a decision tree next. 
+
+```{r dt}
+set.seed(202)
+
+# Let's set up a tuning grid
+dt_grid <- expand.grid(cp = seq(0, 20))
+
+mod_dt <- train(form = math_score ~ gender + parent_education + lunch + test_prep_course,
+                data = dat,
+                method = "rpart",
+                trControl = trainControl(method = "repeatedcv", 
+                                         number = 10, 
+                                         repeats = 5),
+                tuneGrid = dt_grid)
+
+print(mod_dt)
+```
+
+Seems like model performance is slightly poorer in the decision tree. We see that model's prediction deviates by `r round(mod_dt$results$RMSE[1],2)`. 
+
+That said, we can plot the decision tree to get a better understanding of which are the better predictors of math score. But first, we need to refit the decision tree using the `rpart` function. 
+
+```{r }
+mod_dt_basic <- rpart(formula = math_score ~ gender + parent_education + lunch + test_prep_course,
+                      data = dat)
+
+rpart.plot(mod_dt_basic, type = 4)
+
+```
+Looking at the tree diagram above, we can see that the best predictor is lunch plan, whereby the standard lunch plan leads to better math score. Going down the branches, we can see that higher math scores is associated with parent's education being more than high school and having completed the test preparation course. This fits with what we interpreted from the exploratory analyses, but it's important to note that model performance is still somewhat poor, so more data is needed to validate our claims.
+
+# Conclusion
+
+Let's take a look at our research questions once again:
+
+1. Are math, reading, and writing scores all correlated?
+
+From our earlier analyses, we see that these scores are definitely very related to one another, which suggests that students need to apply both reading and writing scores when dealing with mathematical problems.
+
+2. How do students fare in these tests overall?
+
+A simple series of histograms shows us that most students score above average in each domain, though we would need a much larger sample size to ascertain whether this is representative of the population.
+
+3. Can we attempt to model the relationship between math score and other variables?
+
+We were able to build a regression and decision tree model to predict math score from several variables (gender, test preparation course, parents' education, and lunch plan), but unfortunately, the predictive performance was not at all impressive. 
+
+That said, when examining the decision tree diagram, we see that the pattern of results seem to align with what we identified in the exploratory analysis (e.g., higher performance seems tied to the standard lunch plan). This might spur further analysis of the effectiveness of various education policies, as well as pave the way for more robust educational interventions. 
+
+Hope you've enjoyed this brief demo analysis! 

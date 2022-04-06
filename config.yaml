@@ -16,11 +16,12 @@ menu:
   main:
     - name: About
       url: /about/
-    - name: GitHub
-      url: https://github.com/rstudio/timothy-liew
-    - name: LinkedIn
-      url: https://www.linkedin.com/in/timothy-liew-134616136/
+    - name: Archive
+      url: /archives/
+    - name: Tags
+      url: /tags/
 params:
+
   MathJaxCDN: //cdnjs.cloudflare.com/ajax/libs
   MathJaxVersion: 2.7.5
   description: A website built through Hugo and blogdown.
@@ -36,8 +37,23 @@ params:
     height: 50
     url: logo.png
     width: 50
+  showtoc: true
+  
+  homeInfoParams:
+    Title: "Hi there \U0001F44B"
+    Content: Welcome to my blog, where we deal with data and grapple with graphs
+
+  socialIcons:
+    - name: twitter
+      url: "https://twitter.com/"
+    - name: LinkedIn
+      url: "https://www.linkedin.com/in/timothy-liew-134616136/"
+    - name: github
+      url: "https://github.com/timothy-liew"
+  
 markup:
   defaultMarkdownHandler: goldmark
   goldmark:
     renderer:
       unsafe: yes
+
