@@ -1,0 +1,284 @@
+---
+title: Using SQL in R
+author: Timothy Liew
+date: '2022-05-06'
+slug: using-sql-in-r
+categories: []
+tags: [SQL, dplyr]
+cover:
+    image: "https://images.unsplash.com/photo-1544383835-bda2bc66a55d?ixlib=rb-1.2.1&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=836&q=80"
+    # can also paste direct link from external site
+    # ex. https://i.ibb.co/K0HVPBd/paper-mod-profilemode.png
+    alt: "<alt text>"
+    caption: "Now which drawer has my sandwich again?"
+    relative: false # To use relative path for cover image, used in hugo Page-bundles
+
+---
+
+# SQL and R 
+
+I have been learning a bit of SQL over the last few months, and the whole data wrangling aspect of it really appeals to me (it's kind of like trying to wrangle a Rubik's cube until you get the right configuration, only I don't end up crying halfway). 
+
+Of course, being the hardcore R fan that I am, I wanted to see whether there were ways to implement SQL queries in R Studio, and I wasn't disappointed at all. While you'd probably not want to rely on R Studio exclusively to run SQL queries (I imagine issues will crop up when your dataset is gargantuan), it's still nice to see these two languages meet in the middle, so to speak.
+
+# Baby Names
+
+In this post, we'll take a quick look at how to create databases and run SQL queries in R Studio. We'll then smoothly transition to doing some quick visualisations using R. 
+
+We'll work with the baby name data (provided by the Social Security Administration) from the `babynames` package (very aptly named). The name data includes all names with at least 5 uses.
+
+```{r packages, warning = FALSE, message = FALSE}
+library(babynames)
+library(tidyverse)
+glimpse(babynames)
+```
+
+# SQLite Database
+
+Next thing we want to do is to create a database. We'll be relying on functions from the `DBI` and `RSQLite` packages.
+
+```{r packages 2, warning = FALSE}
+library(DBI)
+library(RSQLite)
+```
+
+Usually, we would create a new database with something like the following, which would read in an existing file.
+
+```{r, eval = FALSE}
+mydb <- dbConnect(drv = RSQLite::SQLite(), "my-db.sqlite")
+dbDisconnect(mydb)
+```
+
+In this example, however, we'll be creating a new database by writing the datasets from `babynames` into a temporary database.
+
+```{r db}
+# This will create a temporary database 
+mydb <- dbConnect(RSQLite::SQLite(), "")
+dbWriteTable(conn = mydb, name = "babynames", value = babynames::babynames)
+dbWriteTable(mydb, "applicants", babynames::applicants)
+dbWriteTable(mydb, "births", babynames::births)
+
+# dbWriteTable throws an error for lifetables because of a duplicate column, so we'll fix that first before writing it into the database
+lifetables <- lifetables %>% 
+  rename("age-span" = Lx) 
+
+dbWriteTable(mydb, "lifetables", lifetables)
+
+dbListTables(mydb)
+```
+
+# SQL Queries
+
+All right, now for the fun part. Let's try issuing some SQL queries with `dbGetQuery`. We can find out the top ten male names in 2017. Remember to put quotation marks around your SQL statements!
+
+```{r}
+dbGetQuery(mydb,
+           "SELECT * 
+           FROM babynames
+           WHERE year = 2017 AND sex = 'M'
+           ORDER BY n desc
+           LIMIT 10")
+
+```
+
+What about the top ten male names across all years? (This time we'll only display the names and their frequencies)
+
+```{r}
+dbGetQuery(mydb,
+           "SELECT name, SUM(n) as frequency 
+           FROM babynames
+           WHERE sex = 'M'
+           GROUP BY name
+           ORDER BY frequency desc
+           LIMIT 10")
+```
+Not too surprising that James and John are the most common male names. 
+
+## Subqueries/Joins
+
+Okay time for something just a little more complex. Let's say we want to combine see the total number of SSN applications and total births for each year. We will need to use an INNER JOIN to combine two tables.
+
+```{r}
+dbGetQuery(mydb,
+           "SELECT a.year, SUM(a.n_all) as applicants, b.births
+           FROM applicants a INNER JOIN births b
+            ON a.year = b.year
+           GROUP BY a.year
+           LIMIT 10")
+```
+Note that we had to sum up the number of male and female applicants prior to joining the tables.
+
+Okay, so what if for some reason I wanted to indicate when the number of applicants exceeded the number of births each year? We can use a combination of subqueries and CASE WHEN statements to accomplish this goal. 
+
+```{r}
+# We'll insert the results into a reactable table
+options(reactable.theme = reactable::reactableTheme(
+  color = "#000000",
+  highlightColor = "#f0f5f9",
+  style = list(fontFamily = "Cambria"),
+  searchInputStyle = list(width = "100%")
+))
+
+dbGetQuery(mydb,
+           "SELECT *, 
+          CASE 
+            WHEN applicants > births THEN 'YES' ELSE 'NO'
+            END AS `A>B` 
+          FROM (SELECT a.year, SUM(a.n_all) as applicants, b.births
+          FROM applicants a INNER JOIN births b
+            ON a.year = b.year
+            GROUP BY a.year)") %>% 
+  # Let's input the data into a reactable
+  reactable::reactable(filterable = TRUE,
+                       highlight = TRUE,
+                       outlined = TRUE,
+                       bordered = TRUE)
+```
+
+# Data Visualisation
+
+Now that we've warmed up from going through some basic SQL queries, let's try to put it into practice by wrangling our dataset and then creating a basic visualisation. 
+
+One thing we can do is to visualise the top male and female names across the years. First, we need to wrangle our data to get that information. Here we will see some subquery action. 
+
+
+```{r subquery}
+
+# Note: We need a subquery here because window functions can't be used when you have WHERE, GROUP BY, or HAVING; we use subqueries to get around this limitation
+
+# Inner query: We use a window function to sort the names in descending order (grouped by sex)
+# Outer query: We select everything from the subqueries, choosing only the top names (automatically grouped by  and year thanks to the inner query)
+# We get the total frequency for each name for both sex
+top_names <- dbGetQuery(mydb,
+                         "
+                         SELECT sex, name, year, n
+                         FROM 
+                         (SELECT *,
+                         RANK() OVER (PARTITION BY sex, year ORDER by n DESC) AS rank
+                         FROM babynames)
+                         WHERE rank = 1
+                         ")
+
+```
+
+```{r include = FALSE, eval = FALSE}
+
+# Note: I don't need any of this, but I'm saving it just in case
+
+# Goal: Obtain the top 10 names each year for both sex 
+# Inner query: We use a window function to sort the names in descending order (grouped by sex and year)
+# Outer query: We select just the name from the inner query,choosing only the top 10 names (automatically grouped by sex and year thanks to the inner query)
+top_names <- dbGetQuery(mydb,
+                          "
+                          SELECT name, year, total
+                          FROM
+                          (SELECT sex, name, year, total,
+                          RANK() OVER (PARTITION BY sex, year ORDER by total DESC) AS rank
+                          FROM
+                          (SELECT sex, name, SUM(n) AS total, year
+                          FROM babynames
+                          GROUP by name, sex))
+                          WHERE rank <= 10
+                          ")
+
+# Goal combining everything above to provide the total number of each of the yearly top 10 names for both sexes
+# When we do this kind of filtering (WHERE...), the inner query has to only output one column (don't think too much about this). You can select how many other columns in the outer query of course
+top_names_year <- dbGetQuery(mydb,
+                          "
+                          -- Outer query
+                          SELECT year, sex, name, n
+                          FROM babynames
+                          WHERE name IN
+                          -- Inner query 1
+                          (SELECT name
+                          FROM
+                          -- Inner query 2
+                          (SELECT sex, name, total, year,
+                          RANK() OVER (PARTITION BY sex, year ORDER by total DESC) AS rank
+                          FROM
+                          -- Inner query 3
+                          (SELECT sex, name, SUM(n) AS total
+                          FROM babynames
+                          GROUP by name, sex)) 
+                          WHERE rank <= 10)
+                          ")
+```
+
+
+## Visualising most popular names
+
+Let's see how we can visualise the trend of the top names across time. We can show the top names every 5 years instead of every single year to avoid overplotting.
+
+```{r, include = FALSE}
+# Not gonna use this code, but keeping it just in case
+
+decade_vector <- tibble(start = seq(1880, 2017, 10)) %>% 
+  mutate(end = start + 9, id = row_number()) %>% 
+  # We want to update one of the row values
+  # x is the original data frame, y is the changes we want to make in the form of a tibble
+  # Note that I only want to change "end", but I include the "start" so that R knows which row to look for
+  rows_update(x = ., y = tibble(start = 2010, end = 2017)) 
+
+# You will note that I could have just performed the operations in the decade_vector to the top_names without the need to inner_join with the decade_vector (i.e., performed the operations directly on top_names), but I enjoyed the practice 
+top_names_decade <- top_names %>% 
+  inner_join(decade_vector, by = c("year" = "start"))
+```
+
+
+```{r, fig.width=10, fig.height=6, message=FALSE}
+decade_vector <- tibble(decade = seq(1880, 2017, 10))
+
+# Define names for facet labels
+gender_labels <- c(
+  "F" = "Female Names",
+  "M" = "Male Names"
+)
+
+library(viridis)
+top_names %>% 
+  filter(year %in% decade_vector$decade) %>% 
+  mutate(year = factor(year)) %>% 
+  ggplot(aes(x = year, y = n, color = year), size = 1.5) +
+  geom_point() + 
+  geom_segment(aes(x = year, xend = year, y = 0, yend = n), size = 1) + 
+  geom_text(aes(label = name), size = 3.5, nudge_y = 8000) + 
+  ggthemes::theme_clean() + 
+  # The begin and end arguments help define the range of colors we want (i.e., I don't want yellow which is at the end of the viridis color range)
+  scale_color_viridis(discrete = TRUE, option = "B", begin = 0, end = 0.8) + 
+  theme(legend.position = "None", 
+        strip.text.x = element_text(size = 12, face = "bold")) + 
+  labs(title = "Top Male and Female Names",
+       y = NULL,
+       x = "Year") + 
+  facet_wrap(~sex, nrow = 2, labeller = as_labeller(gender_labels))
+
+```
+We can see that the names Mary and John were the most popular female and male names for several decades, after which various other names took the top spot for most popular baby names. 
+
+# SQL to R and back
+
+One other cool thing I discovered is the existence of packages that facilitate translating SQL code to R code and vice versa. For example, `queryparser` provides a function that parses an SQL query into a list with the corresponding R expressions.
+
+- You can even set `tidyverse = TRUE` to see the operations using tidyverse syntax.
+
+```{r}
+library(queryparser)
+parse_query("SELECT * 
+            FROM babynames
+            WHERE year = 2017 AND sex = 'M'
+            ORDER BY n desc
+            LIMIT 10", tidyverse = TRUE)
+
+```
+Another interesting packages is `dbplyr`, which translates `dplyr` syntax into SQL queries. 
+```{r, message=FALSE}
+library(dbplyr)
+tbl(mydb, "babynames") %>% 
+  filter(year == 2017 & sex == "M") %>% 
+  slice_max(n = 10, order_by = n) %>% 
+  show_query()
+
+```
+
+Ordinarily I wouldn't think this terribly useful, but it might prove helpful when trying to teach SQL to someone who has prior experience coding in R. Being more familiar with `dplyr` myself, I also imagine it might be somewhat useful in helping to figure out SQL queries that you know how to do in `dplyr`. 
+
